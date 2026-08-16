@@ -1,0 +1,50 @@
+name: Spark Native Build
+
+# Cloud native-iOS builds. The Spark backend queues a job in the Supabase `builds` table and fires
+# a repository_dispatch (event_type: spark-build) with the row id. This macOS runner then generates
+# the SwiftUI app, compiles + runs it in the iOS Simulator, screenshots it, fixes compile errors and
+# retries, and writes the result back to the row — all off the user's own Mac.
+#
+# NOTE: repository_dispatch only triggers workflows that already exist on the repo's DEFAULT branch,
+# so this file must be committed + pushed to the default branch before the backend can trigger it.
+
+on:
+  repository_dispatch:
+    types: [spark-build]
+  workflow_dispatch: # lets you trigger a build by hand from the Actions tab (for testing)
+    inputs:
+      buildId:
+        description: "builds table row id (uuid)"
+        required: true
+
+concurrency:
+  # Never run two jobs for the same build id at once; different builds run in parallel.
+  group: spark-build-${{ github.event.client_payload.buildId || github.event.inputs.buildId }}
+  cancel-in-progress: false
+
+jobs:
+  build:
+    runs-on: macos-latest # Apple Silicon runner with Xcode + iOS simulators preinstalled
+    timeout-minutes: 20
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+
+      - name: Toolchain info
+        run: |
+          xcodebuild -version
+          xcrun --sdk iphonesimulator --show-sdk-path
+          xcrun simctl list runtimes | grep -i ios || true
+
+      - name: Run Spark build
+        env:
+          BUILD_ID: ${{ github.event.client_payload.buildId || github.event.inputs.buildId }}
+          SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+          SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
+          OPENROUTER_API_KEY: ${{ secrets.OPENROUTER_API_KEY }}
+        run: node scripts/native-build-runner.mjs

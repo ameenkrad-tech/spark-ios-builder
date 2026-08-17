@@ -339,7 +339,9 @@ export function buildAttempt(files, { displayName = "App", capabilities = [] } =
 async function main() {
   const build = await getBuild(BUILD_ID);
   if (!build) { console.error(`Build ${BUILD_ID} not found`); process.exit(1); }
-  await patchBuild(BUILD_ID, { status: "running" });
+  await patchBuild(BUILD_ID, { status: "running", phase: "coding" });
+  // Fire-and-forget progress notes → the app narrates them live (phase is only "real" on failure/done).
+  const note = (p) => { patchBuild(BUILD_ID, { phase: p }).catch(() => {}); };
 
   const START = Date.now();
   const timeLeft = () => BUDGET_MS - (Date.now() - START);
@@ -352,6 +354,7 @@ async function main() {
 
   for (let i = 0; i < MAX_ROUNDS; i++) {
     if (!files || Object.keys(files).length === 0) { phase = "generate"; errors = "Couldn't write the project in time."; break; }
+    note("compiling");
     try {
       const r = buildAttempt(files, { displayName, capabilities });
       screenshot = r.screenshot; projectBundle = r.bundle; phase = undefined; errors = undefined; break;
@@ -360,6 +363,7 @@ async function main() {
     }
     rounds++;
     if (i === MAX_ROUNDS - 1 || timeLeft() < 120_000) break; // xcodebuild rounds are slow — leave headroom
+    note("fixing");
     const fixedRaw = await callModel(
       GEN_SYSTEM + "\n\nNOW you are FIXING build errors in the project below. Return the COMPLETE corrected project in the SAME format (optional CAPABILITIES line + `>>>>>> FILE:` blocks). Make minimal edits that resolve EVERY listed error without changing the app's behavior or design; keep it iOS-17 and self-contained.",
       `Build this iOS app:\n${prompt}\n\nThe build failed (${phase}) with these errors:\n${errors}\n\nCURRENT PROJECT:\n${serializeProject(files, capabilities).slice(0, 60000)}\n\nFix the errors and return the complete corrected project.`,

@@ -242,6 +242,25 @@ ${appExtra ? appExtra + "\n" : ""}    settings:
   return yml;
 }
 
+/** Serialize a generated project directory (sources + Info.plists + the .xcodeproj) into a text bundle
+ *  (`>>>>>> PFILE: <relpath>` blocks) so the client can reconstruct a real, openable .xcodeproj. Skips
+ *  build outputs and binaries — an xcodegen project is all text. */
+function serializeProjectDir(dir) {
+  const SKIP = /(^|\/)(build|buildwatch|\.git|\.DS_Store)(\/|$)|\.(png|jpg|jpeg|pdf|zip)$/i;
+  let bundle = "";
+  const walk = (d, rel = "") => {
+    for (const e of fs.readdirSync(d, { withFileTypes: true })) {
+      const r = rel ? `${rel}/${e.name}` : e.name;
+      if (SKIP.test(r)) continue;
+      const full = path.join(d, e.name);
+      if (e.isDirectory()) walk(full, r);
+      else { try { bundle += `>>>>>> PFILE: ${r}\n${fs.readFileSync(full, "utf8")}\n`; } catch {} }
+    }
+  };
+  walk(dir);
+  return bundle;
+}
+
 /** Pull the compiler errors out of xcodebuild's verbose log (fall back to the tail). */
 function xcodeErrors(out) {
   const lines = String(out).split("\n").filter((l) => /error:|error G|fatal error/i.test(l));
@@ -307,7 +326,10 @@ export function buildAttempt(files, { displayName = "App", capabilities = [] } =
     spawnSync("xcrun", ["simctl", "io", udid, "screenshot", shot], { encoding: "utf8" });
     spawnSync("xcrun", ["simctl", "uninstall", udid, bundleId]);
     const b64 = fs.readFileSync(shot).toString("base64");
-    return { screenshot: `data:image/png;base64,${b64}` };
+    // Multi-target apps can't be opened as a .swiftpm, so ship the whole generated project (sources +
+    // Info.plists + the real .xcodeproj) as a text bundle for the client to write out and open.
+    const bundle = (has.widget || has.watch) ? serializeProjectDir(dir) : null;
+    return { screenshot: `data:image/png;base64,${b64}`, bundle };
   } finally {
     fs.rmSync(dir, { recursive: true, force: true });
   }
@@ -326,13 +348,13 @@ async function main() {
 
   let { files, capabilities } = parseProject(await callModel(GEN_SYSTEM, `Build this iOS app:\n${prompt}`, timeLeft()));
   let rounds = 0;
-  let phase, errors, screenshot;
+  let phase, errors, screenshot, projectBundle = null;
 
   for (let i = 0; i < MAX_ROUNDS; i++) {
     if (!files || Object.keys(files).length === 0) { phase = "generate"; errors = "Couldn't write the project in time."; break; }
     try {
       const r = buildAttempt(files, { displayName, capabilities });
-      screenshot = r.screenshot; phase = undefined; errors = undefined; break;
+      screenshot = r.screenshot; projectBundle = r.bundle; phase = undefined; errors = undefined; break;
     } catch (e) {
       phase = e.phase || "error"; errors = e.errors || String(e);
     }
@@ -350,8 +372,10 @@ async function main() {
   // Store the whole project (delimited) in `swift` so the client can reconstruct every file.
   const projectText = files ? serializeProject(files, capabilities) : "";
   if (screenshot) {
-    await patchBuild(BUILD_ID, { status: "done", screenshot, swift: projectText, rounds, phase: null, errors: null });
-    console.log(`BUILD OK (rounds: ${rounds}, files: ${Object.keys(files).length}, caps: ${capabilities.join(",") || "none"})`);
+    const doneFields = { status: "done", screenshot, swift: projectText, rounds, phase: null, errors: null };
+    if (projectBundle) doneFields.project_bundle = projectBundle; // only touch the column when multi-target
+    await patchBuild(BUILD_ID, doneFields);
+    console.log(`BUILD OK (rounds: ${rounds}, files: ${Object.keys(files).length}, caps: ${capabilities.join(",") || "none"}, bundle: ${projectBundle ? projectBundle.length + "b" : "none"})`);
   } else {
     await patchBuild(BUILD_ID, { status: "failed", phase: phase || "error", errors: errors || "Build failed", swift: projectText, rounds });
     console.log(`BUILD FAILED: ${phase || "error"}`);

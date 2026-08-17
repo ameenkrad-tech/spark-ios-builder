@@ -21,8 +21,8 @@ const { BUILD_ID, SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY, OPENROUTER_API_KEY } 
 
 const OPENROUTER_URL = "https://openrouter.ai/api/v1/chat/completions";
 const CODE_MODEL = "openai/gpt-5.6-luna"; // mirror of build-native/route.ts — keep in sync
-const MAX_ROUNDS = 4;
-const BUDGET_MS = 15 * 60 * 1000;         // xcodebuild is slower than swiftc — a bit more headroom
+const MAX_ROUNDS = 12;                     // keep fixing until it builds clean (safety backstop)
+const BUDGET_MS = 25 * 60 * 1000;          // generous wall-clock so it can iterate through many fixes
 const XCODEGEN = process.env.XCODEGEN_BIN || "xcodegen";
 
 // Multi-file generation. The model emits an optional CAPABILITIES line + one block per source file,
@@ -362,7 +362,7 @@ async function main() {
       phase = e.phase || "error"; errors = e.errors || String(e);
     }
     rounds++;
-    if (i === MAX_ROUNDS - 1 || timeLeft() < 120_000) break; // xcodebuild rounds are slow — leave headroom
+    if (i === MAX_ROUNDS - 1 || timeLeft() < 180_000) break; // stop only if out of attempts or time for another round
     note("fixing");
     const fixedRaw = await callModel(
       GEN_SYSTEM + "\n\nNOW you are FIXING build errors in the project below. Return the COMPLETE corrected project in the SAME format (optional CAPABILITIES line + `>>>>>> FILE:` blocks). Make minimal edits that resolve EVERY listed error without changing the app's behavior or design; keep it iOS-17 and self-contained.",

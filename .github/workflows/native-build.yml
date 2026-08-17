@@ -25,7 +25,7 @@ concurrency:
 jobs:
   build:
     runs-on: macos-latest # Apple Silicon runner with Xcode + iOS simulators preinstalled
-    timeout-minutes: 30 # xcodebuild is slower than swiftc; allow for a few fix rounds
+    timeout-minutes: 45 # keep fixing until clean — allow many build/fix rounds (public repo = free minutes)
     steps:
       - name: Checkout
         uses: actions/checkout@v4

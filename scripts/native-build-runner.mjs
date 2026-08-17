@@ -28,21 +28,26 @@ const XCODEGEN = process.env.XCODEGEN_BIN || "xcodegen";
 // Multi-file generation. The model emits an optional CAPABILITIES line + one block per source file,
 // delimited by `>>>>>> FILE: <name>` (no JSON, to dodge quote-escaping bugs).
 const GEN_SYSTEM =
-  "You are a senior iOS engineer who ships polished, App-Store-quality SwiftUI. Build a COMPLETE, COMPILABLE MULTI-FILE iOS 17 app.\n\n" +
-  "OUTPUT FORMAT (STRICT): If the app uses device capabilities, put ONE line first — `CAPABILITIES: location` (the only allowed value is `location`, for CoreLocation/MapKit; omit the whole line if unused). Then output EACH source file as a block: a line `>>>>>> FILE: <Name>.swift` immediately followed by that file's RAW Swift (NO ``` code fences, no commentary). Example:\n" +
+  "You are a senior iOS engineer who ships polished, App-Store-quality apps. Build a COMPLETE, COMPILABLE MULTI-FILE, MULTI-TARGET iOS 17 project.\n\n" +
+  "OUTPUT FORMAT (STRICT): Optionally ONE first line `CAPABILITIES: location` (only allowed value `location`; omit if unused). Then EACH source file as a block: a line `>>>>>> FILE: <Target>/<Name>.swift` immediately followed by RAW Swift (NO ``` fences, no prose). The path PREFIX assigns the file to a target — `App/` (the iPhone app), `Widget/` (a Live-Activity widget extension), `Watch/` (an Apple Watch app), or `Shared/` (types shared by App + Widget). Example:\n" +
   "CAPABILITIES: location\n" +
-  ">>>>>> FILE: App.swift\n" +
-  "import SwiftUI\n" +
-  "@main struct GenApp: App { var body: some Scene { WindowGroup { RootView() } } }\n" +
-  ">>>>>> FILE: RootView.swift\n" +
-  "import SwiftUI\n" +
-  "struct RootView: View { var body: some View { Text(\"Hi\") } }\n\n" +
-  "STRUCTURE: split the app into SEVERAL well-named files (App.swift with `@main struct GenApp: App`, screen views, a models file, reusable components). EXACTLY ONE file declares `@main struct GenApp: App`. Build a real multi-screen app with `TabView` and/or `NavigationStack`.\n\n" +
-  "FRAMEWORKS: SwiftUI + Foundation always. You MAY ALSO use MapKit (the iOS-17 `Map` + `MapCameraPosition`), CoreLocation (a `CLLocationManager` requesting when-in-use, showing the user's location), and Swift `Charts`. If you use CoreLocation you MUST declare `CAPABILITIES: location`. Do NOT use HealthKit, ActivityKit / Live Activities, SwiftData, networking, push notifications, image/asset files, or external packages (those need setup not available here — draw with SF Symbols and shapes).\n\n" +
-  "RULES: target iOS 17 — `NavigationStack` never `NavigationView`. Persist with `@State`/`@AppStorage`/a single `@StateObject ObservableObject` (`@AppStorage` stores only primitives — JSON-encode collections to `Data`). Everything referenced must be defined across the files; every View stored property is initialized or passed in; `ForEach` uses `Identifiable` or an explicit `id:`.\n\n" +
-  "DESIGN: cohesive accent color, generous consistent padding, clear type hierarchy, rounded cards, SF Symbols, realistic built-in sample data (no blank screens), `.navigationTitle`, tappable rows that navigate.\n\n" +
-  "AVOID: multiple or misnamed `@main`; `Color(hex:)` (use `Color(red:green:blue:)`); the old single-parameter `.onChange(of:) { v in }`; undeclared types; non-primitive `@AppStorage`.\n\n" +
-  "Output ONLY the optional CAPABILITIES line and the `>>>>>> FILE:` blocks — nothing else.";
+  ">>>>>> FILE: App/App.swift\n" +
+  "import SwiftUI\n@main struct GenApp: App { var body: some Scene { WindowGroup { RootView() } } }\n" +
+  ">>>>>> FILE: App/RootView.swift\n" +
+  "import SwiftUI\nstruct RootView: View { var body: some View { Text(\"Hi\") } }\n\n" +
+  "TARGETS: `App/` is REQUIRED — split it into several files (App.swift with the app's `@main …: App`, screens, models, components). ADD other targets ONLY when they genuinely fit:\n" +
+  "• Live Activity (`Widget/` + `Shared/`): add when the app has an ONGOING activity a user glances at on the Lock Screen / Dynamic Island (a run, workout, timer, delivery, game clock). Put the shared attributes in `Shared/`, the widget in `Widget/`, and have the App start it.\n" +
+  "• Apple Watch (`Watch/`): add for fitness / quick-glance apps — a standalone watchOS app.\n" +
+  "For a simple app (calculator, notes, converter) output ONLY `App/` files.\n\n" +
+  "EACH TARGET NEEDS EXACTLY ONE @main, non-colliding:\n" +
+  "• App: `@main struct <Name>App: App { var body: some Scene { WindowGroup { RootView() } } }`.\n" +
+  "• Widget: `@main struct <Name>WidgetBundle: WidgetBundle { var body: some Widget { <Name>LiveActivity() } }`.\n" +
+  "• Watch: `@main struct <Name>WatchApp: App { var body: some Scene { WindowGroup { WatchRootView() } } }`.\n\n" +
+  "LIVE ACTIVITY PATTERN (when used): `Shared/<Name>Attributes.swift` = `import ActivityKit` + `struct <Name>Attributes: ActivityAttributes { struct ContentState: Codable, Hashable { /* live fields */ }; /* static fields */ }`. `Widget/<Name>LiveActivity.swift` = `import ActivityKit`+`WidgetKit`+`SwiftUI`, `struct <Name>LiveActivity: Widget { var body: some WidgetConfiguration { ActivityConfiguration(for: <Name>Attributes.self) { context in /* Lock-Screen view from context.state/context.attributes */ } dynamicIsland: { context in DynamicIsland { DynamicIslandExpandedRegion(.leading){}; DynamicIslandExpandedRegion(.trailing){} } compactLeading:{} compactTrailing:{} minimal:{} } } }`. The App starts it via `import ActivityKit` + `try Activity.request(attributes:…, content: .init(state:…, staleDate: nil), pushType: nil)`. NEVER import ActivityKit or the shared attributes inside `Watch/`.\n\n" +
+  "FRAMEWORKS: SwiftUI + Foundation everywhere. App/Widget/Shared MAY use MapKit (iOS-17 `Map`), CoreLocation (then declare `CAPABILITIES: location`), Swift `Charts`, ActivityKit + WidgetKit. Watch: SwiftUI + Foundation only (no HealthKit yet). Do NOT use SwiftData, networking, push, image/asset files, or external packages.\n\n" +
+  "RULES: iOS 17 — `NavigationStack` not `NavigationView`. Persist with `@State`/`@AppStorage`/a single `@StateObject ObservableObject`. Everything referenced must be defined in its target's files; every View stored property is initialized or passed in; `ForEach` uses `Identifiable` or an explicit `id:`. DESIGN: cohesive accent color, generous padding, clear type hierarchy, rounded cards, SF Symbols, realistic sample data, `.navigationTitle`.\n\n" +
+  "AVOID: two @main in one target; `Color(hex:)` (use `Color(red:green:blue:)`); the old single-parameter `.onChange(of:) { v in }`; undeclared types; non-primitive `@AppStorage`.\n\n" +
+  "Output ONLY the optional CAPABILITIES line and the `>>>>>> FILE: <Target>/<name>.swift` blocks — nothing else.";
 
 /** Device capabilities → Info.plist usage strings (simulator-safe; no entitlements needed for these). */
 const CAP_INFO = {
@@ -147,36 +152,94 @@ function ensureSim() {
   return iphone.udid;
 }
 
-/** xcodegen project spec for a single-target iOS app, with Info.plist usage strings for capabilities. */
-function projectYml(target, displayName, bundleId, capabilities = []) {
-  const props = {};
-  for (const c of capabilities) Object.assign(props, CAP_INFO[c] || {});
-  const extra = Object.entries(props).map(([k, v]) => `        ${k}: ${JSON.stringify(v)}`).join("\n");
-  return `name: ${target}
+/** Which target a path-prefixed file belongs to (App/Widget/Watch/Shared); default App. */
+function targetOf(name) {
+  const m = name.match(/^(App|Widget|Watch|Shared)\//i);
+  if (!m) return "App";
+  const t = m[1].toLowerCase();
+  return t.charAt(0).toUpperCase() + t.slice(1);
+}
+function baseName(name) { return name.replace(/^(App|Widget|Watch|Shared)\//i, ""); }
+
+/** Multi-target xcodegen spec. `has` = {widget, watch, shared}; capabilities → Info.plist strings.
+ *  A Widget target implies a Live Activity (NSSupportsLiveActivities on the app). */
+function projectYml({ displayName, capabilities = [], has }) {
+  const appProps = {};
+  for (const c of capabilities) Object.assign(appProps, CAP_INFO[c] || {});
+  if (has.widget) appProps.NSSupportsLiveActivities = true;
+  const appExtra = Object.entries(appProps)
+    .map(([k, v]) => `        ${k}: ${typeof v === "boolean" ? v : JSON.stringify(v)}`).join("\n");
+  const appSources = has.shared ? "[App, Shared]" : "[App]";
+  const appDeps = has.widget ? "\n    dependencies:\n      - target: AppWidget\n        embed: true" : "";
+
+  let yml = `name: App
 options:
   bundleIdPrefix: com.spark.gen
   deploymentTarget:
     iOS: "17.0"
+    watchOS: "10.0"
 targets:
-  ${target}:
+  App:
     type: application
     platform: iOS
-    sources:
-      - Sources
+    sources: ${appSources}${appDeps}
     info:
-      path: Info.plist
+      path: App/Info.plist
       properties:
         CFBundleDisplayName: ${JSON.stringify(displayName)}
         UILaunchScreen: {}
-${extra ? extra + "\n" : ""}    settings:
+${appExtra ? appExtra + "\n" : ""}    settings:
       base:
-        PRODUCT_BUNDLE_IDENTIFIER: ${bundleId}
+        PRODUCT_BUNDLE_IDENTIFIER: com.spark.gen.App
         GENERATE_INFOPLIST_FILE: "NO"
         TARGETED_DEVICE_FAMILY: "1"
         CODE_SIGNING_ALLOWED: "NO"
         CODE_SIGNING_REQUIRED: "NO"
         CODE_SIGN_IDENTITY: ""
 `;
+  if (has.widget) {
+    const wSources = has.shared ? "[Widget, Shared]" : "[Widget]";
+    yml += `  AppWidget:
+    type: app-extension
+    platform: iOS
+    sources: ${wSources}
+    info:
+      path: Widget/Info.plist
+      properties:
+        CFBundleDisplayName: ${JSON.stringify(displayName + " Widget")}
+        NSExtension:
+          NSExtensionPointIdentifier: com.apple.widgetkit-extension
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: com.spark.gen.App.Widget
+        GENERATE_INFOPLIST_FILE: "NO"
+        TARGETED_DEVICE_FAMILY: "1"
+        CODE_SIGNING_ALLOWED: "NO"
+        CODE_SIGNING_REQUIRED: "NO"
+        CODE_SIGN_IDENTITY: ""
+`;
+  }
+  if (has.watch) {
+    yml += `  AppWatch:
+    type: application
+    platform: watchOS
+    sources: [Watch]
+    info:
+      path: Watch/Info.plist
+      properties:
+        WKApplication: true
+        CFBundleDisplayName: ${JSON.stringify(displayName)}
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: com.spark.gen.App.watchkitapp
+        GENERATE_INFOPLIST_FILE: "NO"
+        TARGETED_DEVICE_FAMILY: "4"
+        CODE_SIGNING_ALLOWED: "NO"
+        CODE_SIGNING_REQUIRED: "NO"
+        CODE_SIGN_IDENTITY: ""
+`;
+  }
+  return yml;
 }
 
 /** Pull the compiler errors out of xcodebuild's verbose log (fall back to the tail). */
@@ -190,44 +253,54 @@ function xcodeErrors(out) {
  * Assemble `files` ({ name → Swift }) into an Xcode project, build it for the simulator, run it, and
  * screenshot. Returns { screenshot } or throws { phase: "project"|"compile"|"run", errors }.
  */
-export function buildAttempt(files, { target = "App", displayName = "App", capabilities = [] } = {}) {
+export function buildAttempt(files, { displayName = "App", capabilities = [] } = {}) {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), "sparkxc-"));
-  const bundleId = `com.spark.gen.${target}`;
+  const bundleId = "com.spark.gen.App";
   try {
-    const src = path.join(dir, "Sources");
-    fs.mkdirSync(src, { recursive: true });
-    for (const [name, content] of Object.entries(files)) {
-      const p = path.join(src, name);
-      fs.mkdirSync(path.dirname(p), { recursive: true });
-      fs.writeFileSync(p, content);
+    // Group files by target prefix (App/Widget/Watch/Shared; unprefixed → App) and write into per-target dirs.
+    const groups = { App: [], Widget: [], Watch: [], Shared: [] };
+    for (const [name, content] of Object.entries(files)) groups[targetOf(name)].push({ name: baseName(name), content });
+    const has = { widget: groups.Widget.length > 0, watch: groups.Watch.length > 0, shared: groups.Shared.length > 0 };
+    for (const [t, arr] of Object.entries(groups)) {
+      if (!arr.length) continue;
+      const tdir = path.join(dir, t);
+      fs.mkdirSync(tdir, { recursive: true });
+      for (const f of arr) fs.writeFileSync(path.join(tdir, f.name), f.content);
     }
-    fs.writeFileSync(path.join(dir, "project.yml"), projectYml(target, displayName, bundleId, capabilities));
+    fs.writeFileSync(path.join(dir, "project.yml"), projectYml({ displayName, capabilities, has }));
 
     const gen = spawnSync(XCODEGEN, ["generate", "--spec", "project.yml"], { cwd: dir, encoding: "utf8" });
     if (gen.status !== 0) { const e = new Error("project"); e.phase = "project"; e.errors = (gen.stderr || gen.stdout || "xcodegen failed"); throw e; }
 
+    // Build the iOS app (+ embedded Live-Activity widget when present).
     const xb = spawnSync("xcodebuild", [
-      "-project", `${target}.xcodeproj`, "-scheme", target, "-sdk", "iphonesimulator",
+      "-project", "App.xcodeproj", "-scheme", "App", "-sdk", "iphonesimulator",
       "-destination", "generic/platform=iOS Simulator", "-derivedDataPath", "build",
       "CODE_SIGNING_ALLOWED=NO", "build",
     ], { cwd: dir, encoding: "utf8", maxBuffer: 64 * 1024 * 1024 });
     if (xb.status !== 0) { const e = new Error("compile"); e.phase = "compile"; e.errors = xcodeErrors(`${xb.stdout || ""}\n${xb.stderr || ""}`); throw e; }
 
-    const appPath = path.join(dir, "build/Build/Products/Debug-iphonesimulator", `${target}.app`);
+    // If there's a Watch app, compile-check it too so a broken watch target is caught + fixed.
+    if (has.watch) {
+      const wb = spawnSync("xcodebuild", [
+        "-project", "App.xcodeproj", "-scheme", "AppWatch", "-sdk", "watchsimulator",
+        "-destination", "generic/platform=watchOS Simulator", "-derivedDataPath", "buildwatch",
+        "CODE_SIGNING_ALLOWED=NO", "build",
+      ], { cwd: dir, encoding: "utf8", maxBuffer: 64 * 1024 * 1024 });
+      if (wb.status !== 0) { const e = new Error("compile"); e.phase = "compile"; e.errors = "Watch app failed to build:\n" + xcodeErrors(`${wb.stdout || ""}\n${wb.stderr || ""}`); throw e; }
+    }
+
+    const appPath = path.join(dir, "build/Build/Products/Debug-iphonesimulator", "App.app");
     if (!fs.existsSync(appPath)) { const e = new Error("run"); e.phase = "run"; e.errors = "built .app not found"; throw e; }
 
     const udid = ensureSim();
     const inst = spawnSync("xcrun", ["simctl", "install", udid, appPath], { encoding: "utf8" });
     if (inst.status !== 0) { const e = new Error("run"); e.phase = "run"; e.errors = inst.stderr; throw e; }
     // Pre-grant + simulate GPS so location apps screenshot with a working map instead of a permission dialog.
-    if (capabilities.includes("location")) {
-      spawnSync("xcrun", ["simctl", "privacy", udid, "grant", "location-always", bundleId], { encoding: "utf8" });
-    }
+    if (capabilities.includes("location")) spawnSync("xcrun", ["simctl", "privacy", udid, "grant", "location-always", bundleId], { encoding: "utf8" });
     const launch = spawnSync("xcrun", ["simctl", "launch", udid, bundleId], { encoding: "utf8" });
     if (launch.status !== 0) { const e = new Error("run"); e.phase = "run"; e.errors = launch.stderr; throw e; }
-    if (capabilities.includes("location")) {
-      spawnSync("xcrun", ["simctl", "location", udid, "set", "41.8781,-87.6298"], { encoding: "utf8" }); // sample: Chicago
-    }
+    if (capabilities.includes("location")) spawnSync("xcrun", ["simctl", "location", udid, "set", "41.8781,-87.6298"], { encoding: "utf8" }); // sample: Chicago
 
     execSync("sleep 4"); // let the first frame render
     const shot = path.join(dir, "shot.png");
@@ -258,7 +331,7 @@ async function main() {
   for (let i = 0; i < MAX_ROUNDS; i++) {
     if (!files || Object.keys(files).length === 0) { phase = "generate"; errors = "Couldn't write the project in time."; break; }
     try {
-      const r = buildAttempt(files, { target: "App", displayName, capabilities });
+      const r = buildAttempt(files, { displayName, capabilities });
       screenshot = r.screenshot; phase = undefined; errors = undefined; break;
     } catch (e) {
       phase = e.phase || "error"; errors = e.errors || String(e);

@@ -24,6 +24,7 @@ const CODE_MODEL = "openai/gpt-5.6-luna"; // mirror of build-native/route.ts —
 const MAX_ROUNDS = 12;                     // keep fixing until it builds clean (safety backstop)
 const BUDGET_MS = 25 * 60 * 1000;          // generous wall-clock so it can iterate through many fixes
 const XCODEGEN = process.env.XCODEGEN_BIN || "xcodegen";
+const ICONGEN = new URL("./icongen.swift", import.meta.url).pathname; // AppKit icon renderer (next to this file)
 
 // Multi-file generation. The model emits an optional CAPABILITIES line + one block per source file,
 // delimited by `>>>>>> FILE: <name>` (no JSON, to dodge quote-escaping bugs).
@@ -168,7 +169,7 @@ function baseName(name) { return name.replace(/^(App|Widget|Watch|Shared)\//i, "
 
 /** Multi-target xcodegen spec. `has` = {widget, watch, shared}; capabilities → Info.plist strings.
  *  A Widget target implies a Live Activity (NSSupportsLiveActivities on the app). */
-function projectYml({ displayName, capabilities = [], has }) {
+function projectYml({ displayName, capabilities = [], has, hasIcon = false }) {
   const appProps = {};
   for (const c of capabilities) Object.assign(appProps, CAP_INFO[c] || {});
   if (has.widget) appProps.NSSupportsLiveActivities = true;
@@ -197,7 +198,7 @@ ${appExtra ? appExtra + "\n" : ""}    settings:
       base:
         PRODUCT_BUNDLE_IDENTIFIER: com.spark.gen.App
         GENERATE_INFOPLIST_FILE: "NO"
-        TARGETED_DEVICE_FAMILY: "1"
+${hasIcon ? "        ASSETCATALOG_COMPILER_APPICON_NAME: AppIcon\n" : ""}        TARGETED_DEVICE_FAMILY: "1"
         CODE_SIGNING_ALLOWED: "NO"
         CODE_SIGNING_REQUIRED: "NO"
         CODE_SIGN_IDENTITY: ""
@@ -273,11 +274,26 @@ function xcodeErrors(out) {
   return picked || String(out).slice(-2000);
 }
 
+/** Render a 1024² app icon (via the AppKit icongen) into the App target's asset catalog. Best-effort:
+ *  returns true if baked (so the project sets ASSETCATALOG_COMPILER_APPICON_NAME). */
+function bakeAppIcon(dir, displayName, symbol) {
+  try {
+    const iconset = path.join(dir, "App/Assets.xcassets/AppIcon.appiconset");
+    fs.mkdirSync(iconset, { recursive: true });
+    const png = path.join(iconset, "AppIcon.png");
+    const r = spawnSync("swift", [ICONGEN, png, displayName, symbol || ""], { encoding: "utf8", timeout: 120000 });
+    if (r.status !== 0 || !fs.existsSync(png)) return false;
+    fs.writeFileSync(path.join(dir, "App/Assets.xcassets/Contents.json"), JSON.stringify({ info: { author: "xcode", version: 1 } }));
+    fs.writeFileSync(path.join(iconset, "Contents.json"), JSON.stringify({ images: [{ filename: "AppIcon.png", idiom: "universal", platform: "ios", size: "1024x1024" }], info: { author: "xcode", version: 1 } }));
+    return true;
+  } catch { return false; }
+}
+
 /**
  * Assemble `files` ({ name → Swift }) into an Xcode project, build it for the simulator, run it, and
  * screenshot. Returns { screenshot } or throws { phase: "project"|"compile"|"run", errors }.
  */
-export function buildAttempt(files, { displayName = "App", capabilities = [] } = {}) {
+export function buildAttempt(files, { displayName = "App", capabilities = [], icon = null } = {}) {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), "sparkxc-"));
   const bundleId = "com.spark.gen.App";
   try {
@@ -291,7 +307,8 @@ export function buildAttempt(files, { displayName = "App", capabilities = [] } =
       fs.mkdirSync(tdir, { recursive: true });
       for (const f of arr) fs.writeFileSync(path.join(tdir, f.name), f.content);
     }
-    fs.writeFileSync(path.join(dir, "project.yml"), projectYml({ displayName, capabilities, has }));
+    const hasIcon = bakeAppIcon(dir, displayName, icon); // render + bake the home-screen icon into App/
+    fs.writeFileSync(path.join(dir, "project.yml"), projectYml({ displayName, capabilities, has, hasIcon }));
 
     const gen = spawnSync(XCODEGEN, ["generate", "--spec", "project.yml"], { cwd: dir, encoding: "utf8" });
     if (gen.status !== 0) { const e = new Error("project"); e.phase = "project"; e.errors = (gen.stderr || gen.stdout || "xcodegen failed"); throw e; }
@@ -361,7 +378,7 @@ async function main() {
     if (!files || Object.keys(files).length === 0) { phase = "generate"; errors = "Couldn't write the project in time."; break; }
     note("compiling");
     try {
-      const r = buildAttempt(files, { displayName, capabilities });
+      const r = buildAttempt(files, { displayName, capabilities, icon });
       screenshot = r.screenshot; projectBundle = r.bundle; phase = undefined; errors = undefined; break;
     } catch (e) {
       phase = e.phase || "error"; errors = e.errors || String(e);

@@ -1,0 +1,51 @@
+name: Spark TestFlight
+
+# Ships a finished Spark build to TestFlight. The backend fires a repository_dispatch
+# (event_type: spark-testflight) with the builds-table row id; this runner reconstructs the project as
+# a signed Xcode archive under the paid team, and uploads it to App Store Connect. See TESTFLIGHT.md.
+#
+# repository_dispatch only triggers workflows on the DEFAULT branch, so this must be pushed to main
+# before the backend can trigger it.
+
+on:
+  repository_dispatch:
+    types: [spark-testflight]
+  workflow_dispatch:
+    inputs:
+      buildId:
+        description: "builds table row id (uuid) to ship to TestFlight"
+        required: true
+
+concurrency:
+  group: spark-testflight-${{ github.event.client_payload.buildId || github.event.inputs.buildId }}
+  cancel-in-progress: false
+
+jobs:
+  testflight:
+    runs-on: macos-latest
+    timeout-minutes: 40
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+
+      - name: Ensure xcodegen
+        run: xcodegen --version || brew install xcodegen
+
+      - name: Toolchain info
+        run: xcodebuild -version && xcodegen --version
+
+      - name: Upload to TestFlight
+        env:
+          BUILD_ID: ${{ github.event.client_payload.buildId || github.event.inputs.buildId }}
+          SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+          SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
+          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+          ASC_KEY_ID: ${{ secrets.ASC_KEY_ID }}
+          ASC_ISSUER_ID: ${{ secrets.ASC_ISSUER_ID }}
+          ASC_KEY_P8: ${{ secrets.ASC_KEY_P8 }}
+        run: node scripts/testflight.mjs

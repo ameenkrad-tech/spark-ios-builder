@@ -22,7 +22,7 @@ func makeIcon(name: String, symbol: String?) -> Data {
     let box = side * 0.52
     if let symbol,
        let raw = NSImage(systemSymbolName: symbol, accessibilityDescription: nil)?
-        .withSymbolConfiguration(NSImage.SymbolConfiguration(pointSize: box, weight: .semibold).applying(.init(paletteColors: [.white]))) {
+        .withSymbolConfiguration(NSImage.SymbolConfiguration(pointSize: box, weight: .semibold).applying(.init(hierarchicalColor: .white))) {
         let s = min(box / max(raw.size.width, 1), box / max(raw.size.height, 1))
         let w = raw.size.width * s, h = raw.size.height * s
         raw.draw(in: NSRect(x: (side - w) / 2, y: (side - h) / 2, width: w, height: h))

@@ -29,8 +29,9 @@ const XCODEGEN = process.env.XCODEGEN_BIN || "xcodegen";
 // delimited by `>>>>>> FILE: <name>` (no JSON, to dodge quote-escaping bugs).
 const GEN_SYSTEM =
   "You are a senior iOS engineer who ships polished, App-Store-quality apps. Build a COMPLETE, COMPILABLE MULTI-FILE, MULTI-TARGET iOS 17 project.\n\n" +
-  "OUTPUT FORMAT (STRICT): Optionally ONE first line `CAPABILITIES: location` (only allowed value `location`; omit if unused). Then EACH source file as a block: a line `>>>>>> FILE: <Target>/<Name>.swift` immediately followed by RAW Swift (NO ``` fences, no prose). The path PREFIX assigns the file to a target — `App/` (the iPhone app), `Widget/` (a Live-Activity widget extension), `Watch/` (an Apple Watch app), or `Shared/` (types shared by App + Widget). Example:\n" +
+  "OUTPUT FORMAT (STRICT): Optionally ONE first line `CAPABILITIES: location` (only allowed value `location`; omit if unused). Also output ONE line `ICON: <sf-symbol-name>` — a REAL SF Symbol that fits the app, used as its home-screen icon (e.g. `figure.run`, `timer`, `fork.knife`, `gamecontroller.fill`, `book.fill`, `heart.fill`, `map.fill`, `dollarsign.circle.fill`). Then EACH source file as a block: a line `>>>>>> FILE: <Target>/<Name>.swift` immediately followed by RAW Swift (NO ``` fences, no prose). The path PREFIX assigns the file to a target — `App/` (the iPhone app), `Widget/` (a Live-Activity widget extension), `Watch/` (an Apple Watch app), or `Shared/` (types shared by App + Widget). Example:\n" +
   "CAPABILITIES: location\n" +
+  "ICON: map.fill\n" +
   ">>>>>> FILE: App/App.swift\n" +
   "import SwiftUI\n@main struct GenApp: App { var body: some Scene { WindowGroup { RootView() } } }\n" +
   ">>>>>> FILE: App/RootView.swift\n" +
@@ -48,7 +49,7 @@ const GEN_SYSTEM =
   "RULES: iOS 17 — `NavigationStack` not `NavigationView`. Persist with `@State`/`@AppStorage`/a single `@StateObject ObservableObject`. Everything referenced must be defined in its target's files; every View stored property is initialized or passed in; `ForEach` uses `Identifiable` or an explicit `id:`.\n\n" +
   "DESIGN — THIS MATTERS A LOT. Make it look like a top-tier App Store app, NOT a tutorial or a default form. Commit to a real visual identity: (1) COHESIVE PALETTE — pick a distinctive accent plus 1-2 supporting tones, a LAYERED background (a near-black or soft off-white base with slightly lighter CARD surfaces), and a clear text hierarchy (primary / secondary / tertiary muted). Define small color constants and reuse them on EVERY screen — never scatter random colors. (2) SPACING on an 8pt rhythm with generous whitespace — group content into padded ROUNDED CARDS (cornerRadius 16-24, `.continuous`), not cramped default `List`/`Form` rows. (3) TYPOGRAPHY with a real scale — big bold hero titles, medium section headers, comfortable body, small muted captions; use weights and `.rounded`/`.monospaced` designs purposefully; tighten big numbers. (4) DEPTH — subtle shadows, layered cards, tasteful gradients or `.ultraThinMaterial`, and ONE hero element per main screen (a big stat, a progress ring, a gradient banner). (5) COMPONENTS — a filled PRIMARY button + a quiet SECONDARY style (both reused), list rows with a leading SF Symbol in a tinted circle, clear section headers, and real EMPTY STATES (icon + friendly line). (6) SF Symbols sized and weighted intentionally. AVOID the default look: plain `Form`/`List` in system gray, unstyled buttons, plain black-on-white with no accent, inconsistent padding, or a wall of bare Text. Every screen must feel deliberately designed and on-brand with the others.\n\n" +
   "AVOID: two @main in one target; `Color(hex:)` (use `Color(red:green:blue:)`); the old single-parameter `.onChange(of:) { v in }`; undeclared types; non-primitive `@AppStorage`.\n\n" +
-  "Output ONLY the optional CAPABILITIES line and the `>>>>>> FILE: <Target>/<name>.swift` blocks — nothing else.";
+  "Output ONLY the CAPABILITIES + ICON lines and the `>>>>>> FILE: <Target>/<name>.swift` blocks — nothing else.";
 
 /** Device capabilities → Info.plist usage strings (simulator-safe; no entitlements needed for these). */
 const CAP_INFO = {
@@ -65,6 +66,8 @@ export function parseProject(raw) {
   let capabilities = [];
   const capM = text.match(/^[ \t]*CAPABILITIES:[ \t]*(.+)$/im);
   if (capM) capabilities = capM[1].split(/[,\s]+/).map((s) => s.trim().toLowerCase()).filter((c) => c in CAP_INFO);
+  const iconM = text.match(/^[ \t]*ICON:[ \t]*([A-Za-z0-9.]+)/im);
+  const icon = iconM ? iconM[1].trim() : null; // model's chosen SF Symbol for the app icon
 
   const files = {};
   const re = />>>>>>[ \t]*FILE:[ \t]*([^\n]+)\n([\s\S]*?)(?=\n>>>>>>[ \t]*FILE:|$)/gi;
@@ -80,12 +83,13 @@ export function parseProject(raw) {
     const swift = extractSwift(raw);
     if (swift && swift.length > 40) files["App.swift"] = swift;
   }
-  return { files, capabilities };
+  return { files, capabilities, icon };
 }
 
-/** Reassemble a parsed project into the delimited format (for the fix prompt). */
-export function serializeProject(files, capabilities) {
+/** Reassemble a parsed project into the delimited format (for the fix prompt + storage). */
+export function serializeProject(files, capabilities, icon) {
   let out = capabilities.length ? `CAPABILITIES: ${capabilities.join(", ")}\n` : "";
+  if (icon) out += `ICON: ${icon}\n`;
   for (const [name, body] of Object.entries(files)) out += `>>>>>> FILE: ${name}\n${body}\n`;
   return out;
 }
@@ -349,7 +353,7 @@ async function main() {
   const prompt = String(build.prompt || "");
   const displayName = String(build.label || "App").slice(0, 30);
 
-  let { files, capabilities } = parseProject(await callModel(GEN_SYSTEM, `Build this iOS app:\n${prompt}`, timeLeft()));
+  let { files, capabilities, icon } = parseProject(await callModel(GEN_SYSTEM, `Build this iOS app:\n${prompt}`, timeLeft()));
   let rounds = 0;
   let phase, errors, screenshot, projectBundle = null;
 
@@ -367,15 +371,15 @@ async function main() {
     note("fixing");
     const fixedRaw = await callModel(
       GEN_SYSTEM + "\n\nNOW you are FIXING build errors in the project below. Return the COMPLETE corrected project in the SAME format (optional CAPABILITIES line + `>>>>>> FILE:` blocks). Make minimal edits that resolve EVERY listed error without changing the app's behavior or design; keep it iOS-17 and self-contained.",
-      `Build this iOS app:\n${prompt}\n\nThe build failed (${phase}) with these errors:\n${errors}\n\nCURRENT PROJECT:\n${serializeProject(files, capabilities).slice(0, 60000)}\n\nFix the errors and return the complete corrected project.`,
+      `Build this iOS app:\n${prompt}\n\nThe build failed (${phase}) with these errors:\n${errors}\n\nCURRENT PROJECT:\n${serializeProject(files, capabilities, icon).slice(0, 60000)}\n\nFix the errors and return the complete corrected project.`,
       timeLeft());
     const fixed = parseProject(fixedRaw);
     if (Object.keys(fixed.files).length === 0) break;
-    files = fixed.files; capabilities = fixed.capabilities;
+    files = fixed.files; capabilities = fixed.capabilities; icon = fixed.icon ?? icon;
   }
 
   // Store the whole project (delimited) in `swift` so the client can reconstruct every file.
-  const projectText = files ? serializeProject(files, capabilities) : "";
+  const projectText = files ? serializeProject(files, capabilities, icon) : "";
   if (screenshot) {
     const doneFields = { status: "done", screenshot, swift: projectText, rounds, phase: null, errors: null };
     if (projectBundle) doneFields.project_bundle = projectBundle; // only touch the column when multi-target
